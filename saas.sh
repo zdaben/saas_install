@@ -1,7 +1,7 @@
 #!/bin/bash
 #=================================================================#
 #  System Required: Debian 12+ / Ubuntu 22.04+                    #
-#  Description: SaaS Web (Next.js) CLI Management Tool v2.1       #
+#  Description: SaaS Web (Next.js) CLI Management Tool v2.2       #
 #  Author: zdaben / AI Assistant                                  #
 #=================================================================#
 
@@ -18,7 +18,7 @@ if [ -f "$CONFIG_FILE" ]; then
     source "$CONFIG_FILE"
 fi
 
-# 初始化基础变量（用于展示或首次安装前的默认值）
+# 初始化基础变量
 DOMAIN=${DOMAIN:-"example.com"}
 APP_PORT=${APP_PORT:-3000}
 APP_NAME=${APP_NAME:-"saas-web"}
@@ -41,9 +41,39 @@ WEB_DIR="${WEB_DIR}"
 EOF
 }
 
+# ---------------------------------------------------------
+# 新增模块：自动修复 Next.js 常见编译与警告问题
+# ---------------------------------------------------------
+fix_nextjs_build_issues() {
+    echo -e "${GREEN}==> 执行代码依赖预检与自动修复 (Auto-Fix)...${PLAIN}"
+    
+    # 1. 消除 baseline-browser-mapping 数据陈旧警告
+    npm i baseline-browser-mapping@latest -D >/dev/null 2>&1 || true
+
+    # 2. 智能补全导致编译失败的类型声明 (例如 file-saver)
+    if [ -f "package.json" ]; then
+        if grep -q '"file-saver"' package.json && ! grep -q '"@types/file-saver"' package.json; then
+            echo -e "${YELLOW}==> 检测到缺少 @types/file-saver，正在自动补全以防止编译报错...${PLAIN}"
+            npm i --save-dev @types/file-saver >/dev/null 2>&1 || true
+        fi
+    fi
+
+    # 3. 修复 Next.js 15+ "middleware" 废弃警告 (自动重命名为 proxy)
+    for ext in ts js; do
+        if [ -f "middleware.${ext}" ]; then
+            echo -e "${YELLOW}==> 自动重命名 middleware.${ext} -> proxy.${ext} (适配 Next.js 15 新规)${PLAIN}"
+            mv "middleware.${ext}" "proxy.${ext}"
+        fi
+        if [ -f "src/middleware.${ext}" ]; then
+            echo -e "${YELLOW}==> 自动重命名 src/middleware.${ext} -> src/proxy.${ext}${PLAIN}"
+            mv "src/middleware.${ext}" "src/proxy.${ext}"
+        fi
+    done
+}
+
 cmd_show_panel() {
     echo -e "\n${GREEN}===========================================================${PLAIN}"
-    echo -e "${GREEN}SaaS Web (Next.js) 终端管理面板 v2.1${PLAIN}"
+    echo -e "${GREEN}SaaS Web (Next.js) 终端管理面板 v2.2${PLAIN}"
     echo -e "-----------------------------------------------------------"
     if [ -f "$CONFIG_FILE" ]; then
         echo -e "访问地址: ${YELLOW}https://${DOMAIN}${PLAIN}"
@@ -82,13 +112,11 @@ cmd_install() {
     
     WEB_DIR="/var/www/${DOMAIN}"
     BACKUP_DIR="${WEB_DIR}/backup"
-    
     save_config
     
     echo -e "\n${GREEN}==> 准备环境与基础依赖...${PLAIN}"
     apt update && apt install -y curl vim nginx certbot python3-certbot-nginx jq tar cron unzip
     
-    # 智能检查 Node.js 版本 (>=20)
     NEED_NODE_UPDATE=true
     if command -v node &> /dev/null; then
         NODE_VERSION=$(node -v | cut -d 'v' -f 2 | cut -d '.' -f 1)
@@ -104,13 +132,11 @@ cmd_install() {
         apt-get install -y nodejs
     fi
 
-    # 检查并安装 PM2
     if ! command -v pm2 &> /dev/null; then
         echo -e "${GREEN}==> 安装 PM2 进程管理器...${PLAIN}"
         npm install -g pm2
     fi
 
-    # 配置 Swap 内存 (防爆内存策略)
     MEM_TOTAL=$(free -m | awk '/Mem/{print $2}')
     if [ "$MEM_TOTAL" -le 2048 ] && [ ! -f /swapfile ]; then
         echo -e "${GREEN}==> 检测到物理内存较小 (${MEM_TOTAL}MB)，配置虚拟内存 (Swap)...${PLAIN}"
@@ -120,14 +146,12 @@ cmd_install() {
         grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' | tee -a /etc/fstab
     fi
 
-    # 1. 自动创建目录
     if [ ! -d "$WEB_DIR" ]; then
         echo -e "${GREEN}==> 检测到运行目录不存在，已自动为您创建: ${CYAN}${WEB_DIR}${PLAIN}"
         mkdir -p "$WEB_DIR"
         chown -R root:root "$WEB_DIR"
     fi
 
-    # 2. 智能判定是否已经上传了源码
     HAS_CODE=true
     if [ ! -f "$WEB_DIR/package.json" ]; then
         echo -e "${YELLOW}==> 提示: 目录 $WEB_DIR 中未检测到源码 (缺少 package.json)。${PLAIN}"
@@ -135,16 +159,19 @@ cmd_install() {
         HAS_CODE=false
     fi
 
-    # 3. 只有存在源码时，才执行构建
     if $HAS_CODE; then
-        echo -e "${GREEN}==> 开始编译与构建应用...${PLAIN}"
         cd "$WEB_DIR"
         npm install
-        npx prisma generate 2>/dev/null || echo -e "${YELLOW}未检测到 Prisma 架构，已跳过。${PLAIN}"
-        npm run build || { echo -e "${RED}项目构建 (npm run build) 失败，请检查源码或日志。${PLAIN}"; exit 1; }
+        
+        # 调用自动修复钩子
+        fix_nextjs_build_issues
+        
+        npx prisma generate 2>/dev/null || true
+        
+        echo -e "${GREEN}==> 开始编译生产环境代码...${PLAIN}"
+        npm run build || { echo -e "${RED}项目构建失败，请检查源码或日志。${PLAIN}"; exit 1; }
     fi
 
-    # Nginx 优化配置 (Next.js 静态文件直接由 Nginx 承载)
     echo -e "${GREEN}==> 配置 Nginx 代理与静态加速...${PLAIN}"
     cat > /etc/nginx/sites-available/${DOMAIN}.conf <<EOF
 server {
@@ -152,7 +179,6 @@ server {
     server_name ${DOMAIN};
     client_max_body_size 50M;
 
-    # 静态文件走 Nginx 物理路径，提升并发性能
     location /_next/static/ {
         alias ${WEB_DIR}/.next/static/;
         expires 365d;
@@ -177,7 +203,6 @@ EOF
     rm -f /etc/nginx/sites-enabled/default
     nginx -t && systemctl reload nginx
 
-    # SSL 证书交互式配置
     read -p "是否立即通过 Certbot 申请并部署 SSL 证书? (y/n) [y]: " ENABLE_SSL
     ENABLE_SSL=${ENABLE_SSL:-y}
     if [[ "$ENABLE_SSL" =~ ^[Yy]$ ]]; then
@@ -189,7 +214,6 @@ EOF
         echo -e "${YELLOW}警告：SSL 配置异常，可能是由于 DNS 未解析，后续可手动运行 certbot 修复。${PLAIN}"
     fi
 
-    # 4. 只有存在源码时，才启动 PM2
     if $HAS_CODE; then
         echo -e "${GREEN}==> 配置并启动 PM2 守护进程...${PLAIN}"
         if pm2 status | grep -q "${APP_NAME}"; then
@@ -201,14 +225,12 @@ EOF
         pm2 startup | tail -n 1 | bash || true
     fi
 
-    # 自动注册全局命令
     if [ ! -f "/usr/local/bin/saas" ]; then
         echo -e "${GREEN}==> 注册系统全局命令 saas...${PLAIN}"
         cp "$0" /usr/local/bin/saas
         chmod +x /usr/local/bin/saas
     fi
 
-    # 5. 动态结束语
     echo -e "\n${GREEN}===========================================================${PLAIN}"
     if $HAS_CODE; then
         echo -e "✅ 安装部署完成！应用已上线，请访问: ${YELLOW}https://${DOMAIN}${PLAIN}"
@@ -241,6 +263,9 @@ cmd_update() {
     echo -e "${GREEN}==> 安装依赖包...${PLAIN}"
     npm install
     
+    # 调用自动修复钩子
+    fix_nextjs_build_issues
+    
     echo -e "${GREEN}==> 生成 Prisma 架构类型...${PLAIN}"
     npx prisma generate 2>/dev/null || true
     
@@ -251,7 +276,6 @@ cmd_update() {
     if pm2 status | grep -q "${APP_NAME}"; then
         pm2 reload ${APP_NAME}
     else
-        # 兼容空目录预装环境后，第一次执行 update 时应用尚未启动的情况
         pm2 start npm --name "${APP_NAME}" -- run start
     fi
     pm2 save
@@ -293,10 +317,8 @@ cmd_backup() {
     local FILE="${BACKUP_DIR}/saas_cfg_${DATE}.tar.gz"
     
     cd "${WEB_DIR}"
-    # 尽力备份配置环境变量、数据库架构以及潜在的 SQLite 本地数据库文件
     tar czf "${FILE}" .env* prisma/*.prisma prisma/*.sqlite prisma/*.db 2>/dev/null || echo -e "${YELLOW}提示: 部分文件未找到，已打包存在的部分。${PLAIN}"
     
-    # 清理 7 天前的过期备份
     find "${BACKUP_DIR}" -name "saas_cfg_*.tar.gz" -mtime +7 -delete 2>/dev/null || true
     echo -e "${GREEN}✅ 数据备份完成: ${CYAN}${FILE}${PLAIN}"
 }
@@ -313,7 +335,6 @@ cmd_recover() {
     ls -lh "${BACKUP_DIR}"/saas_cfg_*.tar.gz | awk '{print NR". "$9" ("$5")"}' | sed "s|${BACKUP_DIR}/||"
     read -p "请选择需要恢复的编号 (输入 0 取消): " IDX
     
-    # 输入合法性校验，避免引起进程异常崩溃
     if ! [[ "$IDX" =~ ^[0-9]+$ ]] || [ "$IDX" -eq 0 ]; then
         echo "已取消数据恢复。"
         exit 0
