@@ -1,7 +1,7 @@
 #!/bin/bash
 #=================================================================#
 #  System Required: Debian 12+ / Ubuntu 22.04+                    #
-#  Description: SaaS Web (Next.js) CLI Management Tool v2.5       #
+#  Description: SaaS Web (Next.js) CLI Management Tool v2.6       #
 #  Author: zdaben / AI Assistant                                  #
 #=================================================================#
 
@@ -67,7 +67,7 @@ fix_nextjs_build_issues() {
 
 cmd_show_panel() {
     echo -e "\n${GREEN}===========================================================${PLAIN}"
-    echo -e "${GREEN}SaaS Web (Next.js) 终端管理面板 v2.5 (全量灾备版)${PLAIN}"
+    echo -e "${GREEN}SaaS Web (Next.js) 终端管理面板 v2.6 (统一灾备版)${PLAIN}"
     echo -e "-----------------------------------------------------------"
     if [ -f "$CONFIG_FILE" ]; then
         echo -e "访问地址: ${YELLOW}https://${DOMAIN}${PLAIN}"
@@ -314,7 +314,7 @@ cmd_backup() {
     echo -e "${GREEN}==> 正在对整个网站项目进行全量打包备份...${PLAIN}"
     mkdir -p "${BACKUP_DIR}"
     local DATE=$(date +%Y%m%d_%H%M%S)
-    local FILE="${BACKUP_DIR}/saas_${DOMAIN}_${DATE}.tar.gz"
+    local FILE="${BACKUP_DIR}/${DOMAIN}_${DATE}.tar.gz"
     
     echo -e "${YELLOW}目标目录: ${WEB_DIR}${PLAIN}"
     # 打包整个项目目录 (包含 .env, node_modules, .next, 数据库文件等)
@@ -324,8 +324,8 @@ cmd_backup() {
     sha256sum "${FILE}" > "${FILE}.sha256"
     
     # 仅清理当前域名 7 天前的过期全量备份
-    find "${BACKUP_DIR}" -name "saas_${DOMAIN}_*.tar.gz" -mtime +7 -delete 2>/dev/null || true
-    find "${BACKUP_DIR}" -name "saas_${DOMAIN}_*.tar.gz.sha256" -mtime +7 -delete 2>/dev/null || true
+    find "${BACKUP_DIR}" -name "${DOMAIN}_*.tar.gz" -mtime +7 -delete 2>/dev/null || true
+    find "${BACKUP_DIR}" -name "${DOMAIN}_*.tar.gz.sha256" -mtime +7 -delete 2>/dev/null || true
     
     echo -e "${GREEN}✅ 全量数据备份完成，已统一存储于: ${CYAN}${FILE}${PLAIN}"
 }
@@ -334,13 +334,13 @@ cmd_recover() {
     check_root
     echo -e "${CYAN}--- 网站全量数据恢复面板 ---${PLAIN}"
     
-    if [ ! -d "${BACKUP_DIR}" ] || ! ls "${BACKUP_DIR}"/saas_${DOMAIN}_*.tar.gz 1> /dev/null 2>&1; then
+    if [ ! -d "${BACKUP_DIR}" ] || ! ls "${BACKUP_DIR}"/${DOMAIN}_*.tar.gz 1> /dev/null 2>&1; then
         echo -e "${YELLOW}错误: 未在 ${BACKUP_DIR} 找到当前域名 (${DOMAIN}) 的历史备份记录！${PLAIN}"
         exit 1
     fi
     
     echo -e "${YELLOW}当前域名 (${DOMAIN}) 的可用全量备份列表：${PLAIN}"
-    ls -lh "${BACKUP_DIR}"/saas_${DOMAIN}_*.tar.gz | awk '{print NR". "$9" ("$5")"}' | sed "s|${BACKUP_DIR}/||"
+    ls -lh "${BACKUP_DIR}"/${DOMAIN}_*.tar.gz | awk '{print NR". "$9" ("$5")"}' | sed "s|${BACKUP_DIR}/||"
     echo -e "-----------------------------------------------------------"
     read -p "请选择需要恢复的编号 (输入 0 取消): " IDX
     
@@ -349,13 +349,13 @@ cmd_recover() {
         exit 0
     fi
     
-    local MAX_IDX=$(ls "${BACKUP_DIR}"/saas_${DOMAIN}_*.tar.gz | wc -l)
+    local MAX_IDX=$(ls "${BACKUP_DIR}"/${DOMAIN}_*.tar.gz | wc -l)
     if [ "$IDX" -gt "$MAX_IDX" ] || [ "$IDX" -lt 1 ]; then
         echo -e "${RED}输入无效编号，取消操作。${PLAIN}"
         exit 1
     fi
     
-    FILE=$(ls "${BACKUP_DIR}"/saas_${DOMAIN}_*.tar.gz | sed -n "${IDX}p")
+    FILE=$(ls "${BACKUP_DIR}"/${DOMAIN}_*.tar.gz | sed -n "${IDX}p")
     
     echo -e "${RED}警告：系统即将执行全量数据恢复操作。${PLAIN}"
     echo -e "此操作将彻底覆盖 ${YELLOW}${WEB_DIR}${PLAIN} 下的所有源码和本地数据库！"
