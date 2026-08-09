@@ -1,7 +1,7 @@
 #!/bin/bash
 #=================================================================#
 #  System Required: Debian 12+ / Ubuntu 22.04+                    #
-#  Description: SaaS Web (Next.js) CLI Management Tool v2.6       #
+#  Description: SaaS Web (Next.js) CLI Management Tool v2.7       #
 #  Author: zdaben / AI Assistant                                  #
 #=================================================================#
 
@@ -39,16 +39,10 @@ WEB_DIR="${WEB_DIR}"
 EOF
 }
 
-# ---------------------------------------------------------
-# 新增模块：自动修复 Next.js / Prisma 常见编译报错
-# ---------------------------------------------------------
 fix_nextjs_build_issues() {
     echo -e "${GREEN}==> 执行代码依赖预检与自动修复 (Auto-Fix)...${PLAIN}"
-    
-    # 1. 消除 baseline-browser-mapping 数据陈旧警告
     npm i baseline-browser-mapping@latest -D >/dev/null 2>&1 || true
 
-    # 2. 智能补全导致编译失败的类型声明
     if [ -f "package.json" ]; then
         if grep -q '"file-saver"' package.json && ! grep -q '"@types/file-saver"' package.json; then
             echo -e "${YELLOW}==> 检测到缺少 @types/file-saver，正在自动补全以防止编译报错...${PLAIN}"
@@ -56,7 +50,6 @@ fix_nextjs_build_issues() {
         fi
     fi
 
-    # 3. 修复 Prisma 7+ 配置中非法的 directUrl 属性
     if [ -f "prisma.config.ts" ]; then
         if grep -q "directUrl:" prisma.config.ts && ! grep -q "//.*directUrl:" prisma.config.ts; then
             echo -e "${YELLOW}==> 自动修复: 注释 prisma.config.ts 中不支持的 directUrl 属性以防类型报错...${PLAIN}"
@@ -67,7 +60,7 @@ fix_nextjs_build_issues() {
 
 cmd_show_panel() {
     echo -e "\n${GREEN}===========================================================${PLAIN}"
-    echo -e "${GREEN}SaaS Web (Next.js) 终端管理面板 v2.6 (统一灾备版)${PLAIN}"
+    echo -e "${GREEN}SaaS Web (Next.js) 终端管理面板 v2.7 (瘦身灾备版)${PLAIN}"
     echo -e "-----------------------------------------------------------"
     if [ -f "$CONFIG_FILE" ]; then
         echo -e "访问地址: ${YELLOW}https://${DOMAIN}${PLAIN}"
@@ -83,8 +76,8 @@ cmd_show_panel() {
     echo -e "  ${YELLOW}saas top${PLAIN}       - 实时监控进程资源占用 (PM2 Monit)"
     echo -e "  ${YELLOW}saas update${PLAIN}    - 重新安装依赖与编译最新代码 (零宕机热重载)"
     echo -e "  ${YELLOW}saas restart${PLAIN}   - 重启 PM2 服务和 Nginx"
-    echo -e "  ${YELLOW}saas backup${PLAIN}    - 执行强一致性热备 (打包全站源码及校验码)"
-    echo -e "  ${YELLOW}saas recover${PLAIN}   - 交互式灾难恢复 (带 SHA256 完整性防污染校验)"
+    echo -e "  ${YELLOW}saas backup${PLAIN}    - 执行强一致性热备 (自动剔除 node_modules 等缓存)"
+    echo -e "  ${YELLOW}saas recover${PLAIN}   - 交互式灾难恢复 (恢复代码并自动重新编译)"
     echo -e "  ${YELLOW}saas install${PLAIN}   - 初始化安装环境 (支持空目录智能预装)"
     echo -e "  ${RED}saas uninstall${PLAIN} - 卸载服务并清理所有相关文件"
     echo -e "-----------------------------------------------------------"
@@ -93,14 +86,11 @@ cmd_show_panel() {
 
 cmd_install() {
     check_root
-    
     echo -e "${CYAN}--- SaaS 部署配置初始化 ---${PLAIN}"
     read -p "请输入要绑定的域名 (默认: ${DOMAIN}): " INPUT_DOMAIN
     DOMAIN=${INPUT_DOMAIN:-$DOMAIN}
-    
     read -p "请输入应用运行端口 (默认: ${APP_PORT}): " INPUT_PORT
     APP_PORT=${INPUT_PORT:-$APP_PORT}
-    
     read -p "请输入 PM2 守护应用名称 (默认: ${APP_NAME}): " INPUT_NAME
     APP_NAME=${INPUT_NAME:-$APP_NAME}
     
@@ -110,7 +100,6 @@ cmd_install() {
     echo -e "\n${GREEN}==> 准备环境与基础依赖...${PLAIN}"
     apt update && apt install -y curl vim nginx certbot python3-certbot-nginx jq tar cron unzip
     
-    # 强制校验并升级到 Node 22
     NEED_NODE_UPDATE=true
     if command -v node &> /dev/null; then
         NODE_VERSION=$(node -v | cut -d 'v' -f 2 | cut -d '.' -f 1)
@@ -133,7 +122,7 @@ cmd_install() {
 
     MEM_TOTAL=$(free -m | awk '/Mem/{print $2}')
     if [ "$MEM_TOTAL" -le 2048 ] && [ ! -f /swapfile ]; then
-        echo -e "${GREEN}==> 检测到物理内存较小 (${MEM_TOTAL}MB)，配置虚拟内存 (Swap)...${PLAIN}"
+        echo -e "${GREEN}==> 配置虚拟内存 (Swap)...${PLAIN}"
         SWAP_SIZE_MB=$([ "$MEM_TOTAL" -le 600 ] && echo 2048 || echo 1024)
         fallocate -l ${SWAP_SIZE_MB}M /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=${SWAP_SIZE_MB} status=none
         chmod 600 /swapfile && mkswap /swapfile >/dev/null 2>&1 && swapon /swapfile
@@ -141,26 +130,22 @@ cmd_install() {
     fi
 
     if [ ! -d "$WEB_DIR" ]; then
-        echo -e "${GREEN}==> 检测到运行目录不存在，已自动为您创建: ${CYAN}${WEB_DIR}${PLAIN}"
+        echo -e "${GREEN}==> 自动为您创建运行目录: ${CYAN}${WEB_DIR}${PLAIN}"
         mkdir -p "$WEB_DIR"
         chown -R root:root "$WEB_DIR"
     fi
 
     HAS_CODE=true
     if [ ! -f "$WEB_DIR/package.json" ]; then
-        echo -e "${YELLOW}==> 提示: 目录 $WEB_DIR 中未检测到源码 (缺少 package.json)。${PLAIN}"
-        echo -e "${YELLOW}==> 将仅为您配置系统环境、Nginx 与 SSL，跳过应用编译与启动步骤。${PLAIN}"
+        echo -e "${YELLOW}==> 提示: 目录中未检测到源码 (缺少 package.json)。将跳过应用编译步骤。${PLAIN}"
         HAS_CODE=false
     fi
 
     if $HAS_CODE; then
         cd "$WEB_DIR"
         npm install
-        
         fix_nextjs_build_issues
-        
         npx prisma generate 2>/dev/null || true
-        
         echo -e "${GREEN}==> 开始编译生产环境代码...${PLAIN}"
         npm run build || { echo -e "${RED}项目构建失败，请检查源码或日志。${PLAIN}"; exit 1; }
     fi
@@ -201,10 +186,7 @@ EOF
     if [[ "$ENABLE_SSL" =~ ^[Yy]$ ]]; then
         read -p "请输入接收证书到期通知的邮箱 (留空则不填): " SSL_EMAIL
         CERT_EMAIL_ARG=$([ -n "$SSL_EMAIL" ] && echo "-m $SSL_EMAIL" || echo "--register-unsafely-without-email")
-        
-        echo -e "${GREEN}==> 正在通过 Certbot 申请 SSL 证书...${PLAIN}"
-        certbot --nginx -d ${DOMAIN} --non-interactive --agree-tos $CERT_EMAIL_ARG --redirect || \
-        echo -e "${YELLOW}警告：SSL 配置异常，可能是由于 DNS 未解析，后续可手动运行 certbot 修复。${PLAIN}"
+        certbot --nginx -d ${DOMAIN} --non-interactive --agree-tos $CERT_EMAIL_ARG --redirect || true
     fi
 
     if $HAS_CODE; then
@@ -219,19 +201,15 @@ EOF
     fi
 
     if [ ! -f "/usr/local/bin/saas" ]; then
-        echo -e "${GREEN}==> 注册系统全局命令 saas...${PLAIN}"
         cp "$0" /usr/local/bin/saas
         chmod +x /usr/local/bin/saas
     fi
 
     echo -e "\n${GREEN}===========================================================${PLAIN}"
     if $HAS_CODE; then
-        echo -e "✅ 安装部署完成！应用已上线，请访问: ${YELLOW}https://${DOMAIN}${PLAIN}"
+        echo -e "✅ 安装部署完成！请访问: ${YELLOW}https://${DOMAIN}${PLAIN}"
     else
-        echo -e "✅ 基础运行环境 (Node22, PM2, Nginx, SSL) 已全部配置完毕！"
-        echo -e "👉 ${YELLOW}下一步操作指南：${PLAIN}"
-        echo -e "1. 请将您的 Next.js 源码上传至: ${CYAN}${WEB_DIR}${PLAIN}"
-        echo -e "2. 上传完成后，在终端执行命令: ${YELLOW}saas update${PLAIN}"
+        echo -e "✅ 基础运行环境配置完毕！请上传代码后运行: ${YELLOW}saas update${PLAIN}"
     fi
     echo -e "${GREEN}===========================================================${PLAIN}"
 }
@@ -244,18 +222,16 @@ cmd_update() {
     fi
     
     cd "$WEB_DIR"
-    echo -e "${YELLOW}注意: 请确保您已经上传了最新的代码文件至: ${CYAN}${WEB_DIR}${PLAIN}"
-    read -p "确认已覆盖文件并开始平滑升级？(y/n) [y]: " CONFIRM
+    read -p "确认已上传新代码并开始平滑升级？(y/n) [y]: " CONFIRM
     CONFIRM=${CONFIRM:-y}
     if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-        echo "已取消更新。"
         exit 0
     fi
 
     if command -v node &> /dev/null; then
         NODE_VERSION=$(node -v | cut -d 'v' -f 2 | cut -d '.' -f 1)
         if [ "$NODE_VERSION" -lt 22 ]; then
-            echo -e "${GREEN}==> 检测到 Node 版本较低，正在为您平滑升级至 Node.js 22 LTS...${PLAIN}"
+            echo -e "${GREEN}==> 正在为您平滑升级至 Node.js 22 LTS...${PLAIN}"
             curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
             apt-get install -y nodejs
         fi
@@ -263,14 +239,11 @@ cmd_update() {
 
     echo -e "${GREEN}==> 安装依赖包...${PLAIN}"
     npm install
-    
     fix_nextjs_build_issues
-    
-    echo -e "${GREEN}==> 生成 Prisma 架构类型...${PLAIN}"
     npx prisma generate 2>/dev/null || true
     
     echo -e "${GREEN}==> 开始编译生产环境代码...${PLAIN}"
-    npm run build || { echo -e "${RED}编译失败，回滚操作被中止。请检查代码错误。${PLAIN}"; exit 1; }
+    npm run build || { echo -e "${RED}编译失败，中止更新。${PLAIN}"; exit 1; }
 
     echo -e "${GREEN}==> 启动或重载 Node 服务 (零宕机)...${PLAIN}"
     if pm2 status | grep -q "${APP_NAME}"; then
@@ -279,7 +252,7 @@ cmd_update() {
         pm2 start npm --name "${APP_NAME}" -- run start
     fi
     pm2 save
-    echo -e "${GREEN}✅ 系统已更新并运行至最新版本代码。${PLAIN}"
+    echo -e "${GREEN}✅ 更新完成！${PLAIN}"
 }
 
 cmd_status() {
@@ -287,133 +260,120 @@ cmd_status() {
     echo -e "\n${GREEN}▶ 基础运行环境:${PLAIN}"
     echo -e "Node.js 版本: $(node -v 2>/dev/null || echo '未安装')"
     echo -e "Nginx 状态:   $(systemctl is-active nginx 2>/dev/null || echo '异常')"
-    
     echo -e "\n${GREEN}▶ PM2 服务列表 (${APP_NAME}):${PLAIN}"
     pm2 list
-    
     echo -e "\n${GREEN}▶ 应用详细资源看板:${PLAIN}"
-    pm2 show ${APP_NAME} | grep -E 'status|uptime|restarts|memory|cpu' || echo "无法获取详细信息。"
+    pm2 show ${APP_NAME} | grep -E 'status|uptime|restarts|memory|cpu' || echo "无信息"
 }
 
 cmd_top() {
     check_root
-    echo -e "${YELLOW}提示: 正在进入实时监控模式，按 'q' 或 Ctrl+C 退出。${PLAIN}"
     pm2 monit
 }
 
 cmd_restart() {
     check_root
-    echo -e "${GREEN}==> 正在重启应用服务与 Web 容器...${PLAIN}"
-    pm2 restart ${APP_NAME} || echo -e "${YELLOW}PM2 服务重启失败或未找到。${PLAIN}"
-    systemctl restart nginx || echo -e "${YELLOW}Nginx 重启失败。${PLAIN}"
-    echo -e "${GREEN}✅ 重启指令执行完毕。${PLAIN}"
+    pm2 restart ${APP_NAME} || true
+    systemctl restart nginx || true
+    echo -e "${GREEN}✅ 重启完毕。${PLAIN}"
 }
 
 cmd_backup() {
     check_root
-    echo -e "${GREEN}==> 正在对整个网站项目进行全量打包备份...${PLAIN}"
+    echo -e "${GREEN}==> 正在执行轻量化站点代码热备...${PLAIN}"
     mkdir -p "${BACKUP_DIR}"
     local DATE=$(date +%Y%m%d_%H%M%S)
     local FILE="${BACKUP_DIR}/${DOMAIN}_${DATE}.tar.gz"
     
-    echo -e "${YELLOW}目标目录: ${WEB_DIR}${PLAIN}"
-    # 打包整个项目目录 (包含 .env, node_modules, .next, 数据库文件等)
-    tar -czf "${FILE}" -C "${WEB_DIR}" .
+    echo -e "${YELLOW}目标: 仅打包核心源码与环境变量 (剔除 node_modules 与编译缓存)...${PLAIN}"
+    # 【核心修改】剔除极其庞大的生成文件夹
+    tar -czf "${FILE}" \
+        --exclude='./node_modules' \
+        --exclude='./.next' \
+        --exclude='./.git' \
+        -C "${WEB_DIR}" .
     
     echo -e "${YELLOW}生成文件 SHA256 完整性校验码...${PLAIN}"
     sha256sum "${FILE}" > "${FILE}.sha256"
     
-    # 仅清理当前域名 7 天前的过期全量备份
     find "${BACKUP_DIR}" -name "${DOMAIN}_*.tar.gz" -mtime +7 -delete 2>/dev/null || true
     find "${BACKUP_DIR}" -name "${DOMAIN}_*.tar.gz.sha256" -mtime +7 -delete 2>/dev/null || true
     
-    echo -e "${GREEN}✅ 全量数据备份完成，已统一存储于: ${CYAN}${FILE}${PLAIN}"
+    echo -e "${GREEN}✅ 瘦身备份完成，体积大幅减小！位置: ${CYAN}${FILE}${PLAIN}"
 }
 
 cmd_recover() {
     check_root
-    echo -e "${CYAN}--- 网站全量数据恢复面板 ---${PLAIN}"
+    echo -e "${CYAN}--- 网站源码与配置恢复面板 ---${PLAIN}"
     
     if [ ! -d "${BACKUP_DIR}" ] || ! ls "${BACKUP_DIR}"/${DOMAIN}_*.tar.gz 1> /dev/null 2>&1; then
-        echo -e "${YELLOW}错误: 未在 ${BACKUP_DIR} 找到当前域名 (${DOMAIN}) 的历史备份记录！${PLAIN}"
+        echo -e "${YELLOW}错误: 未找到备份记录！${PLAIN}"
         exit 1
     fi
     
-    echo -e "${YELLOW}当前域名 (${DOMAIN}) 的可用全量备份列表：${PLAIN}"
+    echo -e "${YELLOW}可用备份列表：${PLAIN}"
     ls -lh "${BACKUP_DIR}"/${DOMAIN}_*.tar.gz | awk '{print NR". "$9" ("$5")"}' | sed "s|${BACKUP_DIR}/||"
     echo -e "-----------------------------------------------------------"
     read -p "请选择需要恢复的编号 (输入 0 取消): " IDX
     
-    if ! [[ "$IDX" =~ ^[0-9]+$ ]] || [ "$IDX" -eq 0 ]; then
-        echo "已取消数据恢复。"
-        exit 0
-    fi
-    
+    if ! [[ "$IDX" =~ ^[0-9]+$ ]] || [ "$IDX" -eq 0 ]; then exit 0; fi
     local MAX_IDX=$(ls "${BACKUP_DIR}"/${DOMAIN}_*.tar.gz | wc -l)
-    if [ "$IDX" -gt "$MAX_IDX" ] || [ "$IDX" -lt 1 ]; then
-        echo -e "${RED}输入无效编号，取消操作。${PLAIN}"
-        exit 1
-    fi
+    if [ "$IDX" -gt "$MAX_IDX" ] || [ "$IDX" -lt 1 ]; then exit 1; fi
     
     FILE=$(ls "${BACKUP_DIR}"/${DOMAIN}_*.tar.gz | sed -n "${IDX}p")
     
-    echo -e "${RED}警告：系统即将执行全量数据恢复操作。${PLAIN}"
-    echo -e "此操作将彻底覆盖 ${YELLOW}${WEB_DIR}${PLAIN} 下的所有源码和本地数据库！"
-    read -p "请确认是否继续？(yes/no): " CONFIRM
-    if [ "$CONFIRM" != "yes" ]; then
-        echo "用户取消操作。"
-        exit 0
-    fi
+    echo -e "${RED}警告：将覆盖 ${WEB_DIR} 下的源码，并重新执行安装与编译！${PLAIN}"
+    read -p "确认继续？(yes/no): " CONFIRM
+    if [ "$CONFIRM" != "yes" ]; then exit 0; fi
 
-    echo -e "${YELLOW}正在验证文件哈希完整性...${PLAIN}"
+    echo -e "${YELLOW}验证文件哈希...${PLAIN}"
     if [ -f "${FILE}.sha256" ]; then
         if ! cd "$(dirname "$FILE")" && sha256sum -c "$(basename "${FILE}.sha256")" >/dev/null 2>&1; then
-            echo -e "${RED}验证失败：备份文件的数据哈希值不匹配，可能已损坏被污染。${PLAIN}"
+            echo -e "${RED}验证失败：备份文件可能已损坏。${PLAIN}"
             exit 1
         fi
         cd - >/dev/null
-        echo -e "${GREEN}哈希校验通过。${PLAIN}"
-    else
-        echo -e "${YELLOW}提示：缺少 .sha256 签名文件，将跳过哈希校验直接解压。${PLAIN}"
     fi
     
-    echo -e "${YELLOW}==> 停止应用服务防止文件占用...${PLAIN}"
+    echo -e "${YELLOW}==> 停止应用服务防止文件冲突...${PLAIN}"
     pm2 stop ${APP_NAME} 2>/dev/null || true
 
-    echo -e "${YELLOW}==> 正在解压并完全覆盖网站目录...${PLAIN}"
+    echo -e "${YELLOW}==> 解压核心源码与配置...${PLAIN}"
     tar -xzf "${FILE}" -C "${WEB_DIR}"
+    
+    # 【核心修改】因为没备份依赖和编译产物，恢复时必须重装依赖并重新构建
+    echo -e "${GREEN}==> 源码恢复成功，正在重建生产运行环境...${PLAIN}"
+    cd "${WEB_DIR}"
+    npm install
+    npx prisma generate 2>/dev/null || true
+    npm run build || { echo -e "${RED}恢复后编译失败，请检查代码兼容性。${PLAIN}"; exit 1; }
     
     echo -e "${GREEN}==> 重启应用服务以加载恢复的数据...${PLAIN}"
     pm2 restart ${APP_NAME} || pm2 start npm --name "${APP_NAME}" -- run start
     pm2 save
     
-    echo -e "${GREEN}✅ 网站全量恢复流程结束，服务已重新上线。${PLAIN}"
+    echo -e "${GREEN}✅ 网站已成功恢复并重新上线！${PLAIN}"
 }
 
 cmd_uninstall() {
     check_root
-    echo -e "${RED}警告：此操作不可逆！将删除 PM2 进程、Nginx 代理规则、配置文件及整个源码目录。${PLAIN}"
-    echo -e "注意：您在此工具中生成的备份 (${BACKUP_DIR}) 将被安全保留。${PLAIN}"
-    echo -e "涉及卸载的目录: ${CYAN}${WEB_DIR}${PLAIN}"
-    read -p "若确认卸载，请输入 'yes': " CONFIRM
+    echo -e "${RED}警告：此操作将删除 PM2 进程、Nginx 代理规则及整个源码目录。${PLAIN}"
+    read -p "确认卸载请输入 'yes': " CONFIRM
     if [ "$CONFIRM" == "yes" ]; then
-        echo -e "${GREEN}==> 停止并注销 PM2 进程...${PLAIN}"
         pm2 stop ${APP_NAME} 2>/dev/null || true
         pm2 delete ${APP_NAME} 2>/dev/null || true
         pm2 save --force
         
-        echo -e "${GREEN}==> 清除 Nginx 规则与证书...${PLAIN}"
         rm -f /etc/nginx/sites-available/${DOMAIN}.conf
         rm -f /etc/nginx/sites-enabled/${DOMAIN}.conf
         certbot delete --cert-name ${DOMAIN} --non-interactive 2>/dev/null || true
         systemctl reload nginx || true
         
-        echo -e "${GREEN}==> 移除项目文件与全局命令...${PLAIN}"
         rm -rf "${WEB_DIR}"
         rm -f "$CONFIG_FILE"
         rm -f /usr/local/bin/saas
         
-        echo -e "${GREEN}✅ SaaS 应用与运行环境已彻底卸载。${PLAIN}"
+        echo -e "${GREEN}✅ 卸载完成。备份文件已安全保留在 ${BACKUP_DIR}。${PLAIN}"
     else
         echo "已取消卸载操作。"
     fi
