@@ -1,7 +1,7 @@
 #!/bin/bash
 #=================================================================#
 #  System Required: Debian 12+ / Ubuntu 22.04+                    #
-#  Description: SaaS Web (Next.js) CLI Management Tool v2.2       #
+#  Description: SaaS Web (Next.js) CLI Management Tool v2.3       #
 #  Author: zdaben / AI Assistant                                  #
 #=================================================================#
 
@@ -13,12 +13,10 @@ PLAIN='\033[0m'
 
 CONFIG_FILE="/etc/saas_config.sh"
 
-# 加载持久化配置（如果存在）
 if [ -f "$CONFIG_FILE" ]; then
     source "$CONFIG_FILE"
 fi
 
-# 初始化基础变量
 DOMAIN=${DOMAIN:-"example.com"}
 APP_PORT=${APP_PORT:-3000}
 APP_NAME=${APP_NAME:-"saas-web"}
@@ -42,7 +40,7 @@ EOF
 }
 
 # ---------------------------------------------------------
-# 新增模块：自动修复 Next.js 常见编译与警告问题
+# 新增模块：自动修复 Next.js / Prisma 常见编译报错
 # ---------------------------------------------------------
 fix_nextjs_build_issues() {
     echo -e "${GREEN}==> 执行代码依赖预检与自动修复 (Auto-Fix)...${PLAIN}"
@@ -50,7 +48,7 @@ fix_nextjs_build_issues() {
     # 1. 消除 baseline-browser-mapping 数据陈旧警告
     npm i baseline-browser-mapping@latest -D >/dev/null 2>&1 || true
 
-    # 2. 智能补全导致编译失败的类型声明 (例如 file-saver)
+    # 2. 智能补全导致编译失败的类型声明
     if [ -f "package.json" ]; then
         if grep -q '"file-saver"' package.json && ! grep -q '"@types/file-saver"' package.json; then
             echo -e "${YELLOW}==> 检测到缺少 @types/file-saver，正在自动补全以防止编译报错...${PLAIN}"
@@ -58,10 +56,10 @@ fix_nextjs_build_issues() {
         fi
     fi
 
-    # 3. 修复 Next.js 15+ "middleware" 废弃警告 (自动重命名为 proxy)
+    # 3. 修复 Next.js 15+ "middleware" 废弃警告
     for ext in ts js; do
         if [ -f "middleware.${ext}" ]; then
-            echo -e "${YELLOW}==> 自动重命名 middleware.${ext} -> proxy.${ext} (适配 Next.js 15 新规)${PLAIN}"
+            echo -e "${YELLOW}==> 自动重命名 middleware.${ext} -> proxy.${ext} (适配 Next 15)${PLAIN}"
             mv "middleware.${ext}" "proxy.${ext}"
         fi
         if [ -f "src/middleware.${ext}" ]; then
@@ -69,11 +67,19 @@ fix_nextjs_build_issues() {
             mv "src/middleware.${ext}" "src/proxy.${ext}"
         fi
     done
+
+    # 4. 修复 Prisma 7+ 配置中非法的 directUrl 属性
+    if [ -f "prisma.config.ts" ]; then
+        if grep -q "directUrl:" prisma.config.ts && ! grep -q "//.*directUrl:" prisma.config.ts; then
+            echo -e "${YELLOW}==> 自动修复: 注释 prisma.config.ts 中不支持的 directUrl 属性以防类型报错...${PLAIN}"
+            sed -i 's/directUrl:/\/\/ directUrl:/g' prisma.config.ts
+        fi
+    fi
 }
 
 cmd_show_panel() {
     echo -e "\n${GREEN}===========================================================${PLAIN}"
-    echo -e "${GREEN}SaaS Web (Next.js) 终端管理面板 v2.2${PLAIN}"
+    echo -e "${GREEN}SaaS Web (Next.js) 终端管理面板 v2.3${PLAIN}"
     echo -e "-----------------------------------------------------------"
     if [ -f "$CONFIG_FILE" ]; then
         echo -e "访问地址: ${YELLOW}https://${DOMAIN}${PLAIN}"
@@ -117,18 +123,19 @@ cmd_install() {
     echo -e "\n${GREEN}==> 准备环境与基础依赖...${PLAIN}"
     apt update && apt install -y curl vim nginx certbot python3-certbot-nginx jq tar cron unzip
     
+    # 强制校验并升级到 Node 22 (适配 Next 15 / Prisma 7)
     NEED_NODE_UPDATE=true
     if command -v node &> /dev/null; then
         NODE_VERSION=$(node -v | cut -d 'v' -f 2 | cut -d '.' -f 1)
-        if [ "$NODE_VERSION" -ge 20 ]; then
+        if [ "$NODE_VERSION" -ge 22 ]; then
             NEED_NODE_UPDATE=false
             echo -e "${CYAN}已检测到兼容的 Node.js 版本 (v${NODE_VERSION})，跳过安装。${PLAIN}"
         fi
     fi
 
     if $NEED_NODE_UPDATE; then
-        echo -e "${GREEN}==> 安装 Node.js 20 LTS...${PLAIN}"
-        curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+        echo -e "${GREEN}==> 检测到 Node 版本低于 22，正在升级 Node.js 22 LTS...${PLAIN}"
+        curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
         apt-get install -y nodejs
     fi
 
@@ -163,7 +170,6 @@ cmd_install() {
         cd "$WEB_DIR"
         npm install
         
-        # 调用自动修复钩子
         fix_nextjs_build_issues
         
         npx prisma generate 2>/dev/null || true
@@ -235,11 +241,10 @@ EOF
     if $HAS_CODE; then
         echo -e "✅ 安装部署完成！应用已上线，请访问: ${YELLOW}https://${DOMAIN}${PLAIN}"
     else
-        echo -e "✅ 基础运行环境 (Node20, PM2, Nginx, SSL) 已全部配置完毕！"
+        echo -e "✅ 基础运行环境 (Node22, PM2, Nginx, SSL) 已全部配置完毕！"
         echo -e "👉 ${YELLOW}下一步操作指南：${PLAIN}"
         echo -e "1. 请将您的 Next.js 源码上传至: ${CYAN}${WEB_DIR}${PLAIN}"
         echo -e "2. 上传完成后，在终端执行命令: ${YELLOW}saas update${PLAIN}"
-        echo -e "系统将自动完成依赖安装、构建编译并启动您的网站服务。"
     fi
     echo -e "${GREEN}===========================================================${PLAIN}"
 }
@@ -260,10 +265,19 @@ cmd_update() {
         exit 0
     fi
 
+    # 兼容 Node 22 环境自动升级
+    if command -v node &> /dev/null; then
+        NODE_VERSION=$(node -v | cut -d 'v' -f 2 | cut -d '.' -f 1)
+        if [ "$NODE_VERSION" -lt 22 ]; then
+            echo -e "${GREEN}==> 检测到 Node 版本较低，正在为您平滑升级至 Node.js 22 LTS...${PLAIN}"
+            curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+            apt-get install -y nodejs
+        fi
+    fi
+
     echo -e "${GREEN}==> 安装依赖包...${PLAIN}"
     npm install
     
-    # 调用自动修复钩子
     fix_nextjs_build_issues
     
     echo -e "${GREEN}==> 生成 Prisma 架构类型...${PLAIN}"
