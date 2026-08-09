@@ -1,7 +1,7 @@
 #!/bin/bash
 #=================================================================#
 #  System Required: Debian 12+ / Ubuntu 22.04+                    #
-#  Description: SaaS Web (Next.js) CLI Management Tool v2.3       #
+#  Description: SaaS Web (Next.js) CLI Management Tool v2.4       #
 #  Author: zdaben / AI Assistant                                  #
 #=================================================================#
 
@@ -56,19 +56,7 @@ fix_nextjs_build_issues() {
         fi
     fi
 
-    # 3. 修复 Next.js 15+ "middleware" 废弃警告
-    for ext in ts js; do
-        if [ -f "middleware.${ext}" ]; then
-            echo -e "${YELLOW}==> 自动重命名 middleware.${ext} -> proxy.${ext} (适配 Next 15)${PLAIN}"
-            mv "middleware.${ext}" "proxy.${ext}"
-        fi
-        if [ -f "src/middleware.${ext}" ]; then
-            echo -e "${YELLOW}==> 自动重命名 src/middleware.${ext} -> src/proxy.${ext}${PLAIN}"
-            mv "src/middleware.${ext}" "src/proxy.${ext}"
-        fi
-    done
-
-    # 4. 修复 Prisma 7+ 配置中非法的 directUrl 属性
+    # 3. 修复 Prisma 7+ 配置中非法的 directUrl 属性
     if [ -f "prisma.config.ts" ]; then
         if grep -q "directUrl:" prisma.config.ts && ! grep -q "//.*directUrl:" prisma.config.ts; then
             echo -e "${YELLOW}==> 自动修复: 注释 prisma.config.ts 中不支持的 directUrl 属性以防类型报错...${PLAIN}"
@@ -79,7 +67,7 @@ fix_nextjs_build_issues() {
 
 cmd_show_panel() {
     echo -e "\n${GREEN}===========================================================${PLAIN}"
-    echo -e "${GREEN}SaaS Web (Next.js) 终端管理面板 v2.3${PLAIN}"
+    echo -e "${GREEN}SaaS Web (Next.js) 终端管理面板 v2.4${PLAIN}"
     echo -e "-----------------------------------------------------------"
     if [ -f "$CONFIG_FILE" ]; then
         echo -e "访问地址: ${YELLOW}https://${DOMAIN}${PLAIN}"
@@ -123,7 +111,7 @@ cmd_install() {
     echo -e "\n${GREEN}==> 准备环境与基础依赖...${PLAIN}"
     apt update && apt install -y curl vim nginx certbot python3-certbot-nginx jq tar cron unzip
     
-    # 强制校验并升级到 Node 22 (适配 Next 15 / Prisma 7)
+    # 强制校验并升级到 Node 22
     NEED_NODE_UPDATE=true
     if command -v node &> /dev/null; then
         NODE_VERSION=$(node -v | cut -d 'v' -f 2 | cut -d '.' -f 1)
@@ -134,7 +122,7 @@ cmd_install() {
     fi
 
     if $NEED_NODE_UPDATE; then
-        echo -e "${GREEN}==> 检测到 Node 版本低于 22，正在升级 Node.js 22 LTS...${PLAIN}"
+        echo -e "${GREEN}==> 检测到 Node 版本过低，正在升级 Node.js 22 LTS...${PLAIN}"
         curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
         apt-get install -y nodejs
     fi
@@ -265,7 +253,6 @@ cmd_update() {
         exit 0
     fi
 
-    # 兼容 Node 22 环境自动升级
     if command -v node &> /dev/null; then
         NODE_VERSION=$(node -v | cut -d 'v' -f 2 | cut -d '.' -f 1)
         if [ "$NODE_VERSION" -lt 22 ]; then
