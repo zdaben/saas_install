@@ -60,7 +60,7 @@ fix_nextjs_build_issues() {
 
 cmd_show_panel() {
     echo -e "\n${GREEN}===========================================================${PLAIN}"
-    echo -e "${GREEN}SaaS Web (Next.js) 终端管理面板 v2.7 (瘦身灾备版)${PLAIN}"
+    echo -e "${GREEN}SaaS Web (Next.js) 终端管理面板${PLAIN}"
     echo -e "-----------------------------------------------------------"
     if [ -f "$CONFIG_FILE" ]; then
         echo -e "访问地址: ${YELLOW}https://${DOMAIN}${PLAIN}"
