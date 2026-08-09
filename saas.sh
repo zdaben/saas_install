@@ -1,7 +1,7 @@
 #!/bin/bash
 #=================================================================#
 #  System Required: Debian 12+ / Ubuntu 22.04+                    #
-#  Description: SaaS Web (Next.js) CLI Management Tool v2.0       #
+#  Description: SaaS Web (Next.js) CLI Management Tool v2.1       #
 #  Author: zdaben / AI Assistant                                  #
 #=================================================================#
 
@@ -43,7 +43,7 @@ EOF
 
 cmd_show_panel() {
     echo -e "\n${GREEN}===========================================================${PLAIN}"
-    echo -e "${GREEN}SaaS Web (Next.js) 终端管理面板 v2.0${PLAIN}"
+    echo -e "${GREEN}SaaS Web (Next.js) 终端管理面板 v2.1${PLAIN}"
     echo -e "-----------------------------------------------------------"
     if [ -f "$CONFIG_FILE" ]; then
         echo -e "访问地址: ${YELLOW}https://${DOMAIN}${PLAIN}"
@@ -61,7 +61,7 @@ cmd_show_panel() {
     echo -e "  ${YELLOW}saas restart${PLAIN}   - 重启 PM2 服务和 Nginx"
     echo -e "  ${YELLOW}saas backup${PLAIN}    - 备份环境变量和配置 (包含本地数据库文件)"
     echo -e "  ${YELLOW}saas recover${PLAIN}   - 从历史备份恢复环境变量"
-    echo -e "  ${YELLOW}saas install${PLAIN}   - 初始化安装环境 (支持自定义域名与端口)"
+    echo -e "  ${YELLOW}saas install${PLAIN}   - 初始化安装环境 (支持空目录智能预装)"
     echo -e "  ${RED}saas uninstall${PLAIN} - 卸载服务并清理所有相关文件"
     echo -e "-----------------------------------------------------------"
     echo -e "${GREEN}===========================================================${PLAIN}"
@@ -120,17 +120,29 @@ cmd_install() {
         grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' | tee -a /etc/fstab
     fi
 
+    # 1. 自动创建目录
     if [ ! -d "$WEB_DIR" ]; then
-        echo -e "${RED}错误: 运行目录 $WEB_DIR 不存在。${PLAIN}"
-        echo -e "${YELLOW}提示: 请先将 Next.js 源码解压或克隆至该目录，然后再执行 saas install。${PLAIN}"
-        exit 1
+        echo -e "${GREEN}==> 检测到运行目录不存在，已自动为您创建: ${CYAN}${WEB_DIR}${PLAIN}"
+        mkdir -p "$WEB_DIR"
+        chown -R root:root "$WEB_DIR"
     fi
 
-    echo -e "${GREEN}==> 开始编译与构建应用...${PLAIN}"
-    cd "$WEB_DIR"
-    npm install
-    npx prisma generate 2>/dev/null || echo -e "${YELLOW}未检测到 Prisma 架构，已跳过。${PLAIN}"
-    npm run build || { echo -e "${RED}项目构建 (npm run build) 失败，请检查源码或日志。${PLAIN}"; exit 1; }
+    # 2. 智能判定是否已经上传了源码
+    HAS_CODE=true
+    if [ ! -f "$WEB_DIR/package.json" ]; then
+        echo -e "${YELLOW}==> 提示: 目录 $WEB_DIR 中未检测到源码 (缺少 package.json)。${PLAIN}"
+        echo -e "${YELLOW}==> 将仅为您配置系统环境、Nginx 与 SSL，跳过应用编译与启动步骤。${PLAIN}"
+        HAS_CODE=false
+    fi
+
+    # 3. 只有存在源码时，才执行构建
+    if $HAS_CODE; then
+        echo -e "${GREEN}==> 开始编译与构建应用...${PLAIN}"
+        cd "$WEB_DIR"
+        npm install
+        npx prisma generate 2>/dev/null || echo -e "${YELLOW}未检测到 Prisma 架构，已跳过。${PLAIN}"
+        npm run build || { echo -e "${RED}项目构建 (npm run build) 失败，请检查源码或日志。${PLAIN}"; exit 1; }
+    fi
 
     # Nginx 优化配置 (Next.js 静态文件直接由 Nginx 承载)
     echo -e "${GREEN}==> 配置 Nginx 代理与静态加速...${PLAIN}"
@@ -177,15 +189,17 @@ EOF
         echo -e "${YELLOW}警告：SSL 配置异常，可能是由于 DNS 未解析，后续可手动运行 certbot 修复。${PLAIN}"
     fi
 
-    # 启动 PM2
-    echo -e "${GREEN}==> 配置并启动 PM2 守护进程...${PLAIN}"
-    if pm2 status | grep -q "${APP_NAME}"; then
-        pm2 reload ${APP_NAME}
-    else
-        pm2 start npm --name "${APP_NAME}" -- run start
+    # 4. 只有存在源码时，才启动 PM2
+    if $HAS_CODE; then
+        echo -e "${GREEN}==> 配置并启动 PM2 守护进程...${PLAIN}"
+        if pm2 status | grep -q "${APP_NAME}"; then
+            pm2 reload ${APP_NAME}
+        else
+            pm2 start npm --name "${APP_NAME}" -- run start
+        fi
+        pm2 save
+        pm2 startup | tail -n 1 | bash || true
     fi
-    pm2 save
-    pm2 startup | tail -n 1 | bash || true
 
     # 自动注册全局命令
     if [ ! -f "/usr/local/bin/saas" ]; then
@@ -194,7 +208,18 @@ EOF
         chmod +x /usr/local/bin/saas
     fi
 
-    echo -e "\n${GREEN}✅ 安装部署完成！请访问 http(s)://${DOMAIN}${PLAIN}"
+    # 5. 动态结束语
+    echo -e "\n${GREEN}===========================================================${PLAIN}"
+    if $HAS_CODE; then
+        echo -e "✅ 安装部署完成！应用已上线，请访问: ${YELLOW}https://${DOMAIN}${PLAIN}"
+    else
+        echo -e "✅ 基础运行环境 (Node20, PM2, Nginx, SSL) 已全部配置完毕！"
+        echo -e "👉 ${YELLOW}下一步操作指南：${PLAIN}"
+        echo -e "1. 请将您的 Next.js 源码上传至: ${CYAN}${WEB_DIR}${PLAIN}"
+        echo -e "2. 上传完成后，在终端执行命令: ${YELLOW}saas update${PLAIN}"
+        echo -e "系统将自动完成依赖安装、构建编译并启动您的网站服务。"
+    fi
+    echo -e "${GREEN}===========================================================${PLAIN}"
 }
 
 cmd_update() {
@@ -213,19 +238,24 @@ cmd_update() {
         exit 0
     fi
 
-    echo -e "${GREEN}==> 安装潜在的新依赖包...${PLAIN}"
+    echo -e "${GREEN}==> 安装依赖包...${PLAIN}"
     npm install
     
-    echo -e "${GREEN}==> 生成架构类型...${PLAIN}"
+    echo -e "${GREEN}==> 生成 Prisma 架构类型...${PLAIN}"
     npx prisma generate 2>/dev/null || true
     
     echo -e "${GREEN}==> 开始编译生产环境代码...${PLAIN}"
     npm run build || { echo -e "${RED}编译失败，回滚操作被中止。请检查代码错误。${PLAIN}"; exit 1; }
 
-    echo -e "${GREEN}==> 重载 Node 服务 (零宕机)...${PLAIN}"
-    pm2 reload ${APP_NAME}
+    echo -e "${GREEN}==> 启动或重载 Node 服务 (零宕机)...${PLAIN}"
+    if pm2 status | grep -q "${APP_NAME}"; then
+        pm2 reload ${APP_NAME}
+    else
+        # 兼容空目录预装环境后，第一次执行 update 时应用尚未启动的情况
+        pm2 start npm --name "${APP_NAME}" -- run start
+    fi
     pm2 save
-    echo -e "${GREEN}✅ 系统已更新至最新版本代码。${PLAIN}"
+    echo -e "${GREEN}✅ 系统已更新并运行至最新版本代码。${PLAIN}"
 }
 
 cmd_status() {
@@ -266,7 +296,7 @@ cmd_backup() {
     # 尽力备份配置环境变量、数据库架构以及潜在的 SQLite 本地数据库文件
     tar czf "${FILE}" .env* prisma/*.prisma prisma/*.sqlite prisma/*.db 2>/dev/null || echo -e "${YELLOW}提示: 部分文件未找到，已打包存在的部分。${PLAIN}"
     
-    # 清理过期备份
+    # 清理 7 天前的过期备份
     find "${BACKUP_DIR}" -name "saas_cfg_*.tar.gz" -mtime +7 -delete 2>/dev/null || true
     echo -e "${GREEN}✅ 数据备份完成: ${CYAN}${FILE}${PLAIN}"
 }
