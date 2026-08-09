@@ -11,6 +11,12 @@
 
 ---
 
+## 🚀 一键执行命令
+
+```bash
+apt update -y && apt install curl wget sudo -y && curl -sSLo /usr/local/bin/saas https://raw.githubusercontent.com/zdaben/saas_install/main/saas.sh && chmod +x /usr/local/bin/saas && saas install
+```
+
 ## ✨ 核心亮点
 
 - 🤖 **一键自动化部署**：交互式配置域名与端口，自动处理 NPM 依赖安装、Prisma 生成与 Next.js 生产环境构建。
