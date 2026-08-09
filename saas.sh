@@ -1,7 +1,7 @@
 #!/bin/bash
 #=================================================================#
 #  System Required: Debian 12+ / Ubuntu 22.04+                    #
-#  Description: SaaS Web (Next.js) CLI Management Tool v2.4       #
+#  Description: SaaS Web (Next.js) CLI Management Tool v2.5       #
 #  Author: zdaben / AI Assistant                                  #
 #=================================================================#
 
@@ -21,7 +21,7 @@ DOMAIN=${DOMAIN:-"example.com"}
 APP_PORT=${APP_PORT:-3000}
 APP_NAME=${APP_NAME:-"saas-web"}
 WEB_DIR=${WEB_DIR:-"/var/www/${DOMAIN}"}
-BACKUP_DIR="${WEB_DIR}/backup"
+BACKUP_DIR="/var/webak"
 
 check_root() {
     if [ "$EUID" -ne 0 ]; then
@@ -67,7 +67,7 @@ fix_nextjs_build_issues() {
 
 cmd_show_panel() {
     echo -e "\n${GREEN}===========================================================${PLAIN}"
-    echo -e "${GREEN}SaaS Web (Next.js) 终端管理面板 v2.4${PLAIN}"
+    echo -e "${GREEN}SaaS Web (Next.js) 终端管理面板 v2.5 (全量灾备版)${PLAIN}"
     echo -e "-----------------------------------------------------------"
     if [ -f "$CONFIG_FILE" ]; then
         echo -e "访问地址: ${YELLOW}https://${DOMAIN}${PLAIN}"
@@ -83,8 +83,8 @@ cmd_show_panel() {
     echo -e "  ${YELLOW}saas top${PLAIN}       - 实时监控进程资源占用 (PM2 Monit)"
     echo -e "  ${YELLOW}saas update${PLAIN}    - 重新安装依赖与编译最新代码 (零宕机热重载)"
     echo -e "  ${YELLOW}saas restart${PLAIN}   - 重启 PM2 服务和 Nginx"
-    echo -e "  ${YELLOW}saas backup${PLAIN}    - 备份环境变量和配置 (包含本地数据库文件)"
-    echo -e "  ${YELLOW}saas recover${PLAIN}   - 从历史备份恢复环境变量"
+    echo -e "  ${YELLOW}saas backup${PLAIN}    - 执行强一致性热备 (打包全站源码及校验码)"
+    echo -e "  ${YELLOW}saas recover${PLAIN}   - 交互式灾难恢复 (带 SHA256 完整性防污染校验)"
     echo -e "  ${YELLOW}saas install${PLAIN}   - 初始化安装环境 (支持空目录智能预装)"
     echo -e "  ${RED}saas uninstall${PLAIN} - 卸载服务并清理所有相关文件"
     echo -e "-----------------------------------------------------------"
@@ -105,7 +105,6 @@ cmd_install() {
     APP_NAME=${INPUT_NAME:-$APP_NAME}
     
     WEB_DIR="/var/www/${DOMAIN}"
-    BACKUP_DIR="${WEB_DIR}/backup"
     save_config
     
     echo -e "\n${GREEN}==> 准备环境与基础依赖...${PLAIN}"
@@ -312,28 +311,37 @@ cmd_restart() {
 
 cmd_backup() {
     check_root
-    echo -e "${GREEN}==> 正在打包环境配置与本地数据...${PLAIN}"
+    echo -e "${GREEN}==> 正在对整个网站项目进行全量打包备份...${PLAIN}"
     mkdir -p "${BACKUP_DIR}"
     local DATE=$(date +%Y%m%d_%H%M%S)
-    local FILE="${BACKUP_DIR}/saas_cfg_${DATE}.tar.gz"
+    local FILE="${BACKUP_DIR}/saas_${DOMAIN}_${DATE}.tar.gz"
     
-    cd "${WEB_DIR}"
-    tar czf "${FILE}" .env* prisma/*.prisma prisma/*.sqlite prisma/*.db 2>/dev/null || echo -e "${YELLOW}提示: 部分文件未找到，已打包存在的部分。${PLAIN}"
+    echo -e "${YELLOW}目标目录: ${WEB_DIR}${PLAIN}"
+    # 打包整个项目目录 (包含 .env, node_modules, .next, 数据库文件等)
+    tar -czf "${FILE}" -C "${WEB_DIR}" .
     
-    find "${BACKUP_DIR}" -name "saas_cfg_*.tar.gz" -mtime +7 -delete 2>/dev/null || true
-    echo -e "${GREEN}✅ 数据备份完成: ${CYAN}${FILE}${PLAIN}"
+    echo -e "${YELLOW}生成文件 SHA256 完整性校验码...${PLAIN}"
+    sha256sum "${FILE}" > "${FILE}.sha256"
+    
+    # 仅清理当前域名 7 天前的过期全量备份
+    find "${BACKUP_DIR}" -name "saas_${DOMAIN}_*.tar.gz" -mtime +7 -delete 2>/dev/null || true
+    find "${BACKUP_DIR}" -name "saas_${DOMAIN}_*.tar.gz.sha256" -mtime +7 -delete 2>/dev/null || true
+    
+    echo -e "${GREEN}✅ 全量数据备份完成，已统一存储于: ${CYAN}${FILE}${PLAIN}"
 }
 
 cmd_recover() {
     check_root
-    echo -e "${CYAN}--- 环境变量与数据恢复面板 ---${PLAIN}"
+    echo -e "${CYAN}--- 网站全量数据恢复面板 ---${PLAIN}"
     
-    if [ ! -d "${BACKUP_DIR}" ] || ! ls "${BACKUP_DIR}"/saas_cfg_*.tar.gz 1> /dev/null 2>&1; then
-        echo -e "${YELLOW}错误: 未找到任何历史备份记录！${PLAIN}"
+    if [ ! -d "${BACKUP_DIR}" ] || ! ls "${BACKUP_DIR}"/saas_${DOMAIN}_*.tar.gz 1> /dev/null 2>&1; then
+        echo -e "${YELLOW}错误: 未在 ${BACKUP_DIR} 找到当前域名 (${DOMAIN}) 的历史备份记录！${PLAIN}"
         exit 1
     fi
     
-    ls -lh "${BACKUP_DIR}"/saas_cfg_*.tar.gz | awk '{print NR". "$9" ("$5")"}' | sed "s|${BACKUP_DIR}/||"
+    echo -e "${YELLOW}当前域名 (${DOMAIN}) 的可用全量备份列表：${PLAIN}"
+    ls -lh "${BACKUP_DIR}"/saas_${DOMAIN}_*.tar.gz | awk '{print NR". "$9" ("$5")"}' | sed "s|${BACKUP_DIR}/||"
+    echo -e "-----------------------------------------------------------"
     read -p "请选择需要恢复的编号 (输入 0 取消): " IDX
     
     if ! [[ "$IDX" =~ ^[0-9]+$ ]] || [ "$IDX" -eq 0 ]; then
@@ -341,22 +349,52 @@ cmd_recover() {
         exit 0
     fi
     
-    local MAX_IDX=$(ls "${BACKUP_DIR}"/saas_cfg_*.tar.gz | wc -l)
+    local MAX_IDX=$(ls "${BACKUP_DIR}"/saas_${DOMAIN}_*.tar.gz | wc -l)
     if [ "$IDX" -gt "$MAX_IDX" ] || [ "$IDX" -lt 1 ]; then
         echo -e "${RED}输入无效编号，取消操作。${PLAIN}"
         exit 1
     fi
     
-    FILE=$(ls "${BACKUP_DIR}"/saas_cfg_*.tar.gz | sed -n "${IDX}p")
-    echo -e "${YELLOW}即将覆盖当前的 .env 配置及本地数据库...${PLAIN}"
-    tar xzf "${FILE}" -C "${WEB_DIR}"
-    echo -e "${GREEN}✅ 恢复完成。建议运行 ${YELLOW}saas restart${PLAIN} 使配置生效。${PLAIN}"
+    FILE=$(ls "${BACKUP_DIR}"/saas_${DOMAIN}_*.tar.gz | sed -n "${IDX}p")
+    
+    echo -e "${RED}警告：系统即将执行全量数据恢复操作。${PLAIN}"
+    echo -e "此操作将彻底覆盖 ${YELLOW}${WEB_DIR}${PLAIN} 下的所有源码和本地数据库！"
+    read -p "请确认是否继续？(yes/no): " CONFIRM
+    if [ "$CONFIRM" != "yes" ]; then
+        echo "用户取消操作。"
+        exit 0
+    fi
+
+    echo -e "${YELLOW}正在验证文件哈希完整性...${PLAIN}"
+    if [ -f "${FILE}.sha256" ]; then
+        if ! cd "$(dirname "$FILE")" && sha256sum -c "$(basename "${FILE}.sha256")" >/dev/null 2>&1; then
+            echo -e "${RED}验证失败：备份文件的数据哈希值不匹配，可能已损坏被污染。${PLAIN}"
+            exit 1
+        fi
+        cd - >/dev/null
+        echo -e "${GREEN}哈希校验通过。${PLAIN}"
+    else
+        echo -e "${YELLOW}提示：缺少 .sha256 签名文件，将跳过哈希校验直接解压。${PLAIN}"
+    fi
+    
+    echo -e "${YELLOW}==> 停止应用服务防止文件占用...${PLAIN}"
+    pm2 stop ${APP_NAME} 2>/dev/null || true
+
+    echo -e "${YELLOW}==> 正在解压并完全覆盖网站目录...${PLAIN}"
+    tar -xzf "${FILE}" -C "${WEB_DIR}"
+    
+    echo -e "${GREEN}==> 重启应用服务以加载恢复的数据...${PLAIN}"
+    pm2 restart ${APP_NAME} || pm2 start npm --name "${APP_NAME}" -- run start
+    pm2 save
+    
+    echo -e "${GREEN}✅ 网站全量恢复流程结束，服务已重新上线。${PLAIN}"
 }
 
 cmd_uninstall() {
     check_root
     echo -e "${RED}警告：此操作不可逆！将删除 PM2 进程、Nginx 代理规则、配置文件及整个源码目录。${PLAIN}"
-    echo -e "涉及目录: ${CYAN}${WEB_DIR}${PLAIN}"
+    echo -e "注意：您在此工具中生成的备份 (${BACKUP_DIR}) 将被安全保留。${PLAIN}"
+    echo -e "涉及卸载的目录: ${CYAN}${WEB_DIR}${PLAIN}"
     read -p "若确认卸载，请输入 'yes': " CONFIRM
     if [ "$CONFIRM" == "yes" ]; then
         echo -e "${GREEN}==> 停止并注销 PM2 进程...${PLAIN}"
