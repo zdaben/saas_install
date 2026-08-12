@@ -1,7 +1,7 @@
 #!/bin/bash
 #=================================================================#
 #  System Required: Debian 12+ / Ubuntu 22.04+                    #
-#  Description: SaaS Web (Next.js) CLI Management Tool v2.7       #
+#  Description: SaaS Web (Next.js) CLI Management Tool            #
 #  Author: zdaben / AI Assistant                                  #
 #=================================================================#
 
@@ -39,8 +39,9 @@ WEB_DIR="${WEB_DIR}"
 EOF
 }
 
+# 自动修复 Next.js / Prisma 常见编译错误
 fix_nextjs_build_issues() {
-    echo -e "${GREEN}==> 执行代码依赖预检与自动修复 (Auto-Fix)...${PLAIN}"
+    echo -e "${GREEN}==> 检查并修复代码依赖...${PLAIN}"
     npm i baseline-browser-mapping@latest -D >/dev/null 2>&1 || true
 
     if [ -f "package.json" ]; then
@@ -52,7 +53,7 @@ fix_nextjs_build_issues() {
 
     if [ -f "prisma.config.ts" ]; then
         if grep -q "directUrl:" prisma.config.ts && ! grep -q "//.*directUrl:" prisma.config.ts; then
-            echo -e "${YELLOW}==> 自动修复: 注释 prisma.config.ts 中不支持的 directUrl 属性以防类型报错...${PLAIN}"
+            echo -e "${YELLOW}==> 自动注释 prisma.config.ts 中不支持的 directUrl 属性...${PLAIN}"
             sed -i 's/directUrl:/\/\/ directUrl:/g' prisma.config.ts
         fi
     fi
@@ -72,14 +73,15 @@ cmd_show_panel() {
     fi
     echo -e "-----------------------------------------------------------"
     echo -e "${GREEN}命令列表:${PLAIN}"
-    echo -e "  ${YELLOW}saas status${PLAIN}    - 查看服务状态与资源占用 (PM2 & Nginx)"
-    echo -e "  ${YELLOW}saas top${PLAIN}       - 实时监控进程资源占用 (PM2 Monit)"
-    echo -e "  ${YELLOW}saas update${PLAIN}    - 重新安装依赖与编译最新代码 (零宕机热重载)"
+    echo -e "  ${YELLOW}saas status${PLAIN}    - 查看服务状态与资源占用"
+    echo -e "  ${YELLOW}saas top${PLAIN}       - 实时监控进程资源占用"
+    echo -e "  ${CYAN}saas build${PLAIN}     - 编译网站源码并平滑重启"
+    echo -e "  ${YELLOW}saas update${PLAIN}    - 更新系统环境、NPM 依赖与 Prisma 模型"
     echo -e "  ${YELLOW}saas restart${PLAIN}   - 重启 PM2 服务和 Nginx"
-    echo -e "  ${YELLOW}saas backup${PLAIN}    - 执行强一致性热备 (自动剔除 node_modules 等缓存)"
-    echo -e "  ${YELLOW}saas recover${PLAIN}   - 交互式灾难恢复 (恢复代码并自动重新编译)"
-    echo -e "  ${YELLOW}saas install${PLAIN}   - 初始化安装环境 (支持空目录智能预装)"
-    echo -e "  ${RED}saas uninstall${PLAIN} - 卸载服务并清理所有相关文件"
+    echo -e "  ${YELLOW}saas backup${PLAIN}    - 备份站点数据 (自动剔除编译缓存与依赖库)"
+    echo -e "  ${YELLOW}saas recover${PLAIN}   - 恢复站点数据并自动重新编译"
+    echo -e "  ${YELLOW}saas install${PLAIN}   - 初始化安装环境 (支持空目录预装)"
+    echo -e "  ${RED}saas uninstall${PLAIN} - 卸载服务并清理相关文件"
     echo -e "-----------------------------------------------------------"
     echo -e "${GREEN}===========================================================${PLAIN}"
 }
@@ -110,7 +112,7 @@ cmd_install() {
     fi
 
     if $NEED_NODE_UPDATE; then
-        echo -e "${GREEN}==> 检测到 Node 版本过低，正在升级 Node.js 22 LTS...${PLAIN}"
+        echo -e "${GREEN}==> 检测到 Node 版本过低，正在安装 Node.js 22 LTS...${PLAIN}"
         curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
         apt-get install -y nodejs
     fi
@@ -130,7 +132,7 @@ cmd_install() {
     fi
 
     if [ ! -d "$WEB_DIR" ]; then
-        echo -e "${GREEN}==> 自动为您创建运行目录: ${CYAN}${WEB_DIR}${PLAIN}"
+        echo -e "${GREEN}==> 创建运行目录: ${CYAN}${WEB_DIR}${PLAIN}"
         mkdir -p "$WEB_DIR"
         chown -R root:root "$WEB_DIR"
     fi
@@ -150,7 +152,7 @@ cmd_install() {
         npm run build || { echo -e "${RED}项目构建失败，请检查源码或日志。${PLAIN}"; exit 1; }
     fi
 
-    echo -e "${GREEN}==> 配置 Nginx 代理与静态加速...${PLAIN}"
+    echo -e "${GREEN}==> 配置 Nginx 代理与静态文件规则...${PLAIN}"
     cat > /etc/nginx/sites-available/${DOMAIN}.conf <<EOF
 server {
     listen 80;
@@ -190,7 +192,7 @@ EOF
     fi
 
     if $HAS_CODE; then
-        echo -e "${GREEN}==> 配置并启动 PM2 守护进程...${PLAIN}"
+        echo -e "${GREEN}==> 启动 PM2 守护进程...${PLAIN}"
         if pm2 status | grep -q "${APP_NAME}"; then
             pm2 reload ${APP_NAME}
         else
@@ -222,7 +224,7 @@ cmd_update() {
     fi
     
     cd "$WEB_DIR"
-    read -p "确认已上传新代码并开始平滑升级？(y/n) [y]: " CONFIRM
+    read -p "此命令将更新系统环境与依赖库 (NPM)，确认执行？(y/n) [y]: " CONFIRM
     CONFIRM=${CONFIRM:-y}
     if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
         exit 0
@@ -231,7 +233,7 @@ cmd_update() {
     if command -v node &> /dev/null; then
         NODE_VERSION=$(node -v | cut -d 'v' -f 2 | cut -d '.' -f 1)
         if [ "$NODE_VERSION" -lt 22 ]; then
-            echo -e "${GREEN}==> 正在为您平滑升级至 Node.js 22 LTS...${PLAIN}"
+            echo -e "${GREEN}==> 升级 Node.js 22 LTS...${PLAIN}"
             curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
             apt-get install -y nodejs
         fi
@@ -242,17 +244,35 @@ cmd_update() {
     fix_nextjs_build_issues
     npx prisma generate 2>/dev/null || true
     
-    echo -e "${GREEN}==> 开始编译生产环境代码...${PLAIN}"
-    npm run build || { echo -e "${RED}编译失败，中止更新。${PLAIN}"; exit 1; }
+    echo -e "${GREEN}✅ 环境与依赖包更新完毕！${PLAIN}"
+    echo -e "${YELLOW}提示: 如需将代码改动生效，请随后执行 ${CYAN}saas build${YELLOW} 进行重新编译。${PLAIN}"
+}
 
-    echo -e "${GREEN}==> 启动或重载 Node 服务 (零宕机)...${PLAIN}"
+cmd_build() {
+    check_root
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo -e "${RED}系统未配置，请先运行 saas install。${PLAIN}"
+        exit 1
+    fi
+    
+    cd "$WEB_DIR"
+    read -p "确认开始编译代码并重启服务？(y/n) [y]: " CONFIRM
+    CONFIRM=${CONFIRM:-y}
+    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+        exit 0
+    fi
+    
+    echo -e "${GREEN}==> 开始编译生产环境代码...${PLAIN}"
+    npm run build || { echo -e "${RED}编译失败，中止更新。请检查代码是否有误。${PLAIN}"; exit 1; }
+
+    echo -e "${GREEN}==> 重载 Node 服务...${PLAIN}"
     if pm2 status | grep -q "${APP_NAME}"; then
         pm2 reload ${APP_NAME}
     else
         pm2 start npm --name "${APP_NAME}" -- run start
     fi
     pm2 save
-    echo -e "${GREEN}✅ 更新完成！${PLAIN}"
+    echo -e "${GREEN}✅ 代码编译完成，服务已重启！${PLAIN}"
 }
 
 cmd_status() {
@@ -280,31 +300,30 @@ cmd_restart() {
 
 cmd_backup() {
     check_root
-    echo -e "${GREEN}==> 正在执行轻量化站点代码热备...${PLAIN}"
+    echo -e "${GREEN}==> 正在备份站点源码与配置...${PLAIN}"
     mkdir -p "${BACKUP_DIR}"
     local DATE=$(date +%Y%m%d_%H%M%S)
     local FILE="${BACKUP_DIR}/${DOMAIN}_${DATE}.tar.gz"
     
-    echo -e "${YELLOW}目标: 仅打包核心源码与环境变量 (剔除 node_modules 与编译缓存)...${PLAIN}"
-    # 【核心修改】剔除极其庞大的生成文件夹
+    echo -e "${YELLOW}目标: 打包核心源码与环境变量 (剔除 node_modules 与编译缓存)...${PLAIN}"
     tar -czf "${FILE}" \
         --exclude='./node_modules' \
         --exclude='./.next' \
         --exclude='./.git' \
         -C "${WEB_DIR}" .
     
-    echo -e "${YELLOW}生成文件 SHA256 完整性校验码...${PLAIN}"
+    echo -e "${YELLOW}生成 SHA256 完整性校验码...${PLAIN}"
     sha256sum "${FILE}" > "${FILE}.sha256"
     
     find "${BACKUP_DIR}" -name "${DOMAIN}_*.tar.gz" -mtime +7 -delete 2>/dev/null || true
     find "${BACKUP_DIR}" -name "${DOMAIN}_*.tar.gz.sha256" -mtime +7 -delete 2>/dev/null || true
     
-    echo -e "${GREEN}✅ 瘦身备份完成，体积大幅减小！位置: ${CYAN}${FILE}${PLAIN}"
+    echo -e "${GREEN}✅ 备份完成！文件路径: ${CYAN}${FILE}${PLAIN}"
 }
 
 cmd_recover() {
     check_root
-    echo -e "${CYAN}--- 网站源码与配置恢复面板 ---${PLAIN}"
+    echo -e "${CYAN}--- 网站恢复面板 ---${PLAIN}"
     
     if [ ! -d "${BACKUP_DIR}" ] || ! ls "${BACKUP_DIR}"/${DOMAIN}_*.tar.gz 1> /dev/null 2>&1; then
         echo -e "${YELLOW}错误: 未找到备份记录！${PLAIN}"
@@ -341,8 +360,7 @@ cmd_recover() {
     echo -e "${YELLOW}==> 解压核心源码与配置...${PLAIN}"
     tar -xzf "${FILE}" -C "${WEB_DIR}"
     
-    # 【核心修改】因为没备份依赖和编译产物，恢复时必须重装依赖并重新构建
-    echo -e "${GREEN}==> 源码恢复成功，正在重建生产运行环境...${PLAIN}"
+    echo -e "${GREEN}==> 源码恢复成功，正在重建生产环境...${PLAIN}"
     cd "${WEB_DIR}"
     npm install
     npx prisma generate 2>/dev/null || true
@@ -382,6 +400,7 @@ cmd_uninstall() {
 case "$1" in
     install)   cmd_install ;;
     update)    cmd_update ;;
+    build)     cmd_build ;;
     status)    cmd_status ;;
     top)       cmd_top ;;
     restart)   cmd_restart ;;
